@@ -130,6 +130,9 @@ class CustomImageCrop extends StatefulWidget {
   /// Default is [BlendMode.srcOver]
   final BlendMode imageFilterBlendMode;
 
+  final double minScale;
+  final double maxScale;
+
   /// A custom image cropper widget
   ///
   /// Uses a `CustomImageCropController` to crop the image.
@@ -171,6 +174,8 @@ class CustomImageCrop extends StatefulWidget {
     this.imageFilter,
     this.imageFilterBlendMode = BlendMode.srcOver,
     Key? key,
+    this.minScale = 0.1,
+    this.maxScale = 10.0,
   })  : this.imagePaintDuringCrop = imagePaintDuringCrop ??
             (Paint()..filterQuality = FilterQuality.high),
         assert(
@@ -712,7 +717,7 @@ class _CustomImageCropState extends State<CustomImageCrop>
     setState(() {
       data = newData;
       // The same check should happen (once available) as in addTransition
-      data.scale = data.scale.clamp(0.1, 10.0);
+      data.scale = data.scale.clamp(widget.minScale, widget.maxScale);
     });
   }
 }
