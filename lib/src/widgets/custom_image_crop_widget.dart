@@ -190,6 +190,10 @@ class CustomImageCrop extends StatefulWidget {
 
 class _CustomImageCropState extends State<CustomImageCrop>
     with CustomImageCropListener {
+  static const double _translationCorrectionEpsilon = 0.5;
+  static const double _scaleCorrectionEpsilon = 1e-4;
+  bool _isNormalizingData = false;
+  bool _needsPostLayoutNormalization = false;
   CropImageData? _dataTransitionStart;
   late Path _path;
   late Path _maskPath;
@@ -231,6 +235,7 @@ class _CustomImageCropState extends State<CustomImageCrop>
   void _updateImage(ImageInfo imageInfo, _) {
     setState(() {
       _imageAsUIImage = imageInfo.image;
+      _needsPostLayoutNormalization = true;
     });
   }
 
@@ -285,6 +290,16 @@ class _CustomImageCropState extends State<CustomImageCrop>
                 borderRadius: widget.borderRadius,
                 shape: widget.maskShape!,
               );
+
+        if (_needsPostLayoutNormalization) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) {
+              return;
+            }
+            _needsPostLayoutNormalization = false;
+            _normalizeDataIfNeeded();
+          });
+        }
 
         Widget overlay = Container(
           color: widget.overlayColor,
@@ -354,13 +369,31 @@ class _CustomImageCropState extends State<CustomImageCrop>
     final angle = widget.canRotate ? event.rotationAngle : 0.0;
 
     if (_dataTransitionStart != null) {
+      final previousTransition = _dataTransitionStart!;
+      final previousDataScale = data.scale;
+      final rawScaleTransition = scale / previousTransition.scale;
+      final targetScale = widget.canScale
+          ? (previousDataScale * rawScaleTransition)
+              .clamp(widget.minScale, widget.maxScale)
+              .toDouble()
+          : previousDataScale;
+      final appliedScaleTransition =
+          previousDataScale == 0 ? 1.0 : targetScale / previousDataScale;
+
       widget.cropController.addTransition(
-        _dataTransitionStart! -
-            CropImageData(
-              scale: scale,
-              angle: angle,
-            ),
+        CropImageData(
+          scale: appliedScaleTransition,
+          angle: angle - previousTransition.angle,
+        ),
       );
+
+      final actualAppliedScaleTransition =
+          previousDataScale == 0 ? 1.0 : data.scale / previousDataScale;
+      _dataTransitionStart = CropImageData(
+        scale: previousTransition.scale * actualAppliedScaleTransition,
+        angle: angle,
+      );
+      return;
     }
     _dataTransitionStart = CropImageData(
       scale: scale,
@@ -417,16 +450,18 @@ class _CustomImageCropState extends State<CustomImageCrop>
     }
 
     if (transition.x != 0 || transition.y != 0) {
-      _addTransitionInternal(
-        _getContainmentDelta(initialImageRect, pathRect),
-      );
+      final containmentDelta = _getContainmentDelta(initialImageRect, pathRect);
+      if (_shouldApplyTranslationCorrection(containmentDelta)) {
+        _addTransitionInternal(containmentDelta);
+      }
       return;
     }
 
-    _addTransitionInternal(
-      _getContainmentDelta(initialImageRect, pathRect),
-    );
-    isContainPath = _isContainPath(initialImageRect, pathRect, data.scale);
+    final containmentDelta = _getContainmentDelta(initialImageRect, pathRect);
+    if (_shouldApplyTranslationCorrection(containmentDelta)) {
+      _addTransitionInternal(containmentDelta);
+      isContainPath = _isContainPath(initialImageRect, pathRect, data.scale);
+    }
 
     if (isContainPath) {
       return;
@@ -436,7 +471,9 @@ class _CustomImageCropState extends State<CustomImageCrop>
         min(initialImageRect.width, initialImageRect.height) / 2;
     double adaptScale = _calculateScaleAfterRotate(
         pathRect, data.scale, initialImageRect, minEdgeHalf);
-    _addTransitionInternal(CropImageData(scale: adaptScale / data.scale));
+    if (adaptScale > data.scale + _scaleCorrectionEpsilon) {
+      _addTransitionInternal(CropImageData(scale: adaptScale / data.scale));
+    }
   }
 
   CropImageData _getContainmentDelta(
@@ -499,6 +536,11 @@ class _CustomImageCropState extends State<CustomImageCrop>
       return (lowerBound + upperBound) / 2;
     }
     return value.clamp(lowerBound, upperBound).toDouble();
+  }
+
+  bool _shouldApplyTranslationCorrection(CropImageData transition) {
+    return transition.x.abs() > _translationCorrectionEpsilon ||
+        transition.y.abs() > _translationCorrectionEpsilon;
   }
 
   Offset _rotateOffset(Offset offset, double angle) {
@@ -622,7 +664,7 @@ class _CustomImageCropState extends State<CustomImageCrop>
 
     ///use binary search to find best scale which just contain path.
     ///Also, we can use imageCenter、imageLine(longest one) and path vertex to calculate.
-    double step = 1 / minEdgeHalf;
+    double step = max(1 / minEdgeHalf, _scaleCorrectionEpsilon);
 
     while ((endScale - startScale).abs() > step) {
       double midScale = (endScale + startScale) / 2;
@@ -630,7 +672,7 @@ class _CustomImageCropState extends State<CustomImageCrop>
       if (_isContainPath(initialImageRect, pathRect, midScale)) {
         endScale = midScale;
       } else {
-        startScale = midScale + step;
+        startScale = midScale;
       }
     }
     return endScale;
@@ -782,9 +824,24 @@ class _CustomImageCropState extends State<CustomImageCrop>
   void setData(CropImageData newData) {
     setState(() {
       data = newData;
-      // The same check should happen (once available) as in addTransition
       data.scale = data.scale.clamp(widget.minScale, widget.maxScale);
     });
+    _normalizeDataIfNeeded();
+  }
+
+  void _normalizeDataIfNeeded() {
+    if (_isNormalizingData ||
+        !widget.forceInsideCropArea ||
+        _imageAsUIImage == null) {
+      return;
+    }
+
+    _isNormalizingData = true;
+    try {
+      _correctTransition(CropImageData(), () {});
+    } finally {
+      _isNormalizingData = false;
+    }
   }
 }
 
