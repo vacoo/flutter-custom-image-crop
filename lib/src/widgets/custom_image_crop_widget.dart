@@ -407,41 +407,107 @@ class _CustomImageCropState extends State<CustomImageCrop>
       callback();
       return;
     }
-    final startX = data.x;
-    final startY = data.y;
     callback();
     final pathRect = _path.getBounds();
     final initialImageRect = _getInitialImageRect();
     bool isContainPath = _isContainPath(initialImageRect, pathRect, data.scale);
-    bool isRotated = data.angle != 0;
 
     if (isContainPath) {
       return;
     }
 
     if (transition.x != 0 || transition.y != 0) {
-      if (isRotated) {
-        _addTransitionInternal(
-            CropImageData(x: startX - data.x, y: startY - data.y));
-      } else {
-        final imageRect = _getImageRect(initialImageRect, data.scale);
-        double deltaX = min(pathRect.left - imageRect.left, 0);
-        deltaX = pathRect.right > imageRect.right
-            ? pathRect.right - imageRect.right
-            : deltaX;
-        double deltaY = min(pathRect.top - imageRect.top, 0);
-        deltaY = pathRect.bottom > imageRect.bottom
-            ? pathRect.bottom - imageRect.bottom
-            : deltaY;
-        _addTransitionInternal(CropImageData(x: deltaX, y: deltaY));
-      }
+      _addTransitionInternal(
+        _getContainmentDelta(initialImageRect, pathRect),
+      );
       return;
     }
+
+    _addTransitionInternal(
+      _getContainmentDelta(initialImageRect, pathRect),
+    );
+    isContainPath = _isContainPath(initialImageRect, pathRect, data.scale);
+
+    if (isContainPath) {
+      return;
+    }
+
     double minEdgeHalf =
         min(initialImageRect.width, initialImageRect.height) / 2;
     double adaptScale = _calculateScaleAfterRotate(
         pathRect, data.scale, initialImageRect, minEdgeHalf);
     _addTransitionInternal(CropImageData(scale: adaptScale / data.scale));
+  }
+
+  CropImageData _getContainmentDelta(
+    Rect initialImageRect,
+    Rect pathRect,
+  ) {
+    final currentScale = data.scale;
+    final imageWidth = currentScale * initialImageRect.width;
+    final imageHeight = currentScale * initialImageRect.height;
+    final halfWidth = imageWidth / 2;
+    final halfHeight = imageHeight / 2;
+    final angle = data.angle;
+
+    final currentCenter = initialImageRect.center.translate(data.x, data.y);
+    final localCurrentCenter = _rotateOffset(currentCenter, -angle);
+    final localCropCorners = [
+      _rotateOffset(pathRect.topLeft, -angle),
+      _rotateOffset(pathRect.topRight, -angle),
+      _rotateOffset(pathRect.bottomLeft, -angle),
+      _rotateOffset(pathRect.bottomRight, -angle),
+    ];
+
+    final minLocalX =
+        localCropCorners.map((corner) => corner.dx).reduce(max) - halfWidth;
+    final maxLocalX =
+        localCropCorners.map((corner) => corner.dx).reduce(min) + halfWidth;
+    final minLocalY =
+        localCropCorners.map((corner) => corner.dy).reduce(max) - halfHeight;
+    final maxLocalY =
+        localCropCorners.map((corner) => corner.dy).reduce(min) + halfHeight;
+
+    final targetLocalCenterX = _closestValueInInterval(
+      value: localCurrentCenter.dx,
+      lowerBound: minLocalX,
+      upperBound: maxLocalX,
+    );
+    final targetLocalCenterY = _closestValueInInterval(
+      value: localCurrentCenter.dy,
+      lowerBound: minLocalY,
+      upperBound: maxLocalY,
+    );
+
+    final targetCenter = _rotateOffset(
+      Offset(targetLocalCenterX, targetLocalCenterY),
+      angle,
+    );
+
+    return CropImageData(
+      x: targetCenter.dx - currentCenter.dx,
+      y: targetCenter.dy - currentCenter.dy,
+    );
+  }
+
+  double _closestValueInInterval({
+    required double value,
+    required double lowerBound,
+    required double upperBound,
+  }) {
+    if (lowerBound > upperBound) {
+      return (lowerBound + upperBound) / 2;
+    }
+    return value.clamp(lowerBound, upperBound).toDouble();
+  }
+
+  Offset _rotateOffset(Offset offset, double angle) {
+    final cosValue = cos(angle);
+    final sinValue = sin(angle);
+    return Offset(
+      offset.dx * cosValue - offset.dy * sinValue,
+      offset.dx * sinValue + offset.dy * cosValue,
+    );
   }
 
   Rect _getImageRect(Rect initialImageRect, double currentScale) {
