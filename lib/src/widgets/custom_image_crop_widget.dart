@@ -193,7 +193,9 @@ class _CustomImageCropState extends State<CustomImageCrop>
   static const double _translationCorrectionEpsilon = 0.5;
   static const double _scaleCorrectionEpsilon = 1e-4;
   bool _isNormalizingData = false;
+  bool _isApplyingInternalData = false;
   bool _needsPostLayoutNormalization = false;
+  bool _isScaleGestureActive = false;
   CropImageData? _dataTransitionStart;
   late Path _path;
   late Path _maskPath;
@@ -324,6 +326,7 @@ class _CustomImageCropState extends State<CustomImageCrop>
           onMoveUpdate: onMoveUpdate,
           onScaleStart: onScaleStart,
           onScaleUpdate: onScaleUpdate,
+          onScaleEnd: onScaleEnd,
           child: Container(
             width: _width,
             height: _height,
@@ -359,10 +362,14 @@ class _CustomImageCropState extends State<CustomImageCrop>
   }
 
   void onScaleStart(_) {
+    _isScaleGestureActive = true;
     _dataTransitionStart = null; // Reset for update
   }
 
   void onScaleUpdate(ScaleEvent event) {
+    if (!_isScaleGestureActive) {
+      return;
+    }
     final scale =
         widget.canScale ? event.scale : (_dataTransitionStart?.scale ?? 1.0);
 
@@ -399,6 +406,11 @@ class _CustomImageCropState extends State<CustomImageCrop>
       scale: scale,
       angle: angle,
     );
+  }
+
+  void onScaleEnd() {
+    _isScaleGestureActive = false;
+    _dataTransitionStart = null;
   }
 
   void onMoveStart(_) {
@@ -810,7 +822,12 @@ class _CustomImageCropState extends State<CustomImageCrop>
   }
 
   void _addTransitionInternal(CropImageData transition) {
-    setData(data + transition);
+    _isApplyingInternalData = true;
+    try {
+      setData(data + transition);
+    } finally {
+      _isApplyingInternalData = false;
+    }
   }
 
   @override
@@ -826,7 +843,9 @@ class _CustomImageCropState extends State<CustomImageCrop>
       data = newData;
       data.scale = data.scale.clamp(widget.minScale, widget.maxScale);
     });
-    _normalizeDataIfNeeded();
+    if (!_isApplyingInternalData) {
+      _normalizeDataIfNeeded();
+    }
   }
 
   void _normalizeDataIfNeeded() {
